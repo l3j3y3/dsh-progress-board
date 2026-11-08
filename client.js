@@ -311,8 +311,8 @@ window.__ModuleLoader__.load({
       .pb-empty h2 { margin: 0 0 5px; font-size: 15px; }
       .pb-empty p { margin: 0 auto; max-width: 540px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
       .pb-add { display: flex; gap: 8px; margin-top: 20px; }
-      .pb-add .pb-input { border-color: var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); padding: 9px 11px; }
-      .pb-add .pb-btn { padding: 8px 14px; font-size: 13px; }
+      .pb-add .pb-input { flex: 1; min-width: 0; border-color: var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); padding: 9px 11px; }
+      .pb-add .pb-btn { flex: none; white-space: nowrap; padding: 8px 14px; font-size: 13px; }
       .pb-done-box { margin-top: 22px; }
       .pb-done-box > summary { cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: 12px; padding: 4px 0; user-select: none; }
       .pb-done-box > summary:hover { color: var(--dsw-alias-label-primary); }
@@ -1298,7 +1298,20 @@ window.__ModuleLoader__.load({
                           h('span', { className: 'pb-side-done-title' }, latestDone.title),
                           h('span', { className: 'pb-side-meta' }, '100%'),
                         ),
+                        latestDone.approach
+                          ? h(
+                              'div',
+                              { className: 'pb-side-detail-line' },
+                              h('b', null, t('approach')),
+                              `：${latestDone.approach}`,
+                            )
+                          : null,
                         latestDone.note ? h('p', { className: 'pb-side-note' }, latestDone.note) : null,
+                        h(
+                          'div',
+                          { className: 'pb-side-detail-line' },
+                          `${t('lastUpdate')} ${new Date(latestDone.updatedAt).toLocaleString()}`,
+                        ),
                       )
                     : h('div', { className: 'pb-side-empty' }, t('sideEmptyDone')),
                 ),
