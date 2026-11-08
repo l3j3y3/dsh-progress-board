@@ -1208,6 +1208,16 @@ window.__ModuleLoader__.load({
             }
             revisionRef.current = body.revision
             setSnapshot(body)
+            const addedTitles = (Array.isArray(changes) ? changes : [])
+              .filter((change) => change && !change.id && !change.remove && typeof change.title === 'string')
+              .map((change) => change.title.trim())
+              .filter(Boolean)
+            if (addedTitles.length > 0) {
+              props.wakeAgent?.(
+                sessionId,
+                `我在进度板新增了任务。请按新任务推进。`,
+              )
+            }
             return true
           } catch (caught) {
             setActionError(errorText(caught))
@@ -1527,6 +1537,16 @@ window.__ModuleLoader__.load({
             }
             revisionRef.current = body.revision
             setSnapshot(body)
+            const addedTitles = (Array.isArray(changes) ? changes : [])
+              .filter((change) => change && !change.id && !change.remove && typeof change.title === 'string')
+              .map((change) => change.title.trim())
+              .filter(Boolean)
+            if (addedTitles.length > 0) {
+              props.wakeAgent?.(
+                sessionId,
+                `我在进度板新增了任务${addedTitles.map((title) => `「${title}」`).join('、')}。请按新任务推进。`,
+              )
+            }
             return true
           } catch (error) {
             setActionError(errorText(error))
@@ -1760,7 +1780,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'locale', 'layout', 'sidebarRight', 'sidebarRightTabs'],
+      inject: ['slots', 'locale', 'layout', 'sidebarRight', 'sidebarRightTabs', 'sessions'],
       apply(ctx) {
         ctx.effect(
           () =>
@@ -1772,6 +1792,15 @@ window.__ModuleLoader__.load({
         )
 
         const t = ctx.locale.bind(NS)
+        const wakeAgent = (sessionId, text) => {
+          try {
+            const binding = ctx.sessions.binding(sessionId)
+            if (!binding) return
+            binding.session.prompt([{ type: 'text', text }], 'queue').catch(() => {})
+          } catch (_error) {
+            // The task is saved; waking is best-effort.
+          }
+        }
         const openPanel = () => ctx.sidebarRight.openTab(RIGHT_TAB_KIND)
         const togglePanel = () => {
           const active = ctx.sidebarRight.active()
@@ -1810,6 +1839,7 @@ window.__ModuleLoader__.load({
                     collapse: () => ctx.sidebarRight.toggleExpanded(),
                     toggleFullscreen,
                     openFullPanel,
+                    wakeAgent,
                   }),
                 },
                 ProgressSidePanel,
@@ -1826,6 +1856,7 @@ window.__ModuleLoader__.load({
                   name: 'main',
                   key: PANEL_ID,
                   locale: NS,
+                  inject: () => ({ wakeAgent }),
                 },
                 ProgressPanel,
               ),
