@@ -10,6 +10,12 @@ window.__ModuleLoader__.load({
     const PANEL_ID = 'progress-board'
     const RIGHT_TAB_ID = '@local/progress-board'
     const RIGHT_TAB_KIND = 'progress-board'
+    const PROGRESS_EVENT = 'progress-board:changed'
+
+    function broadcastProgress(sessionId, snapshot) {
+      if (typeof window === 'undefined' || !snapshot) return
+      window.dispatchEvent(new CustomEvent(PROGRESS_EVENT, { detail: { sessionId, snapshot } }))
+    }
 
     const zh = {
       nav: '进度板',
@@ -902,6 +908,15 @@ window.__ModuleLoader__.load({
           }
         }
 
+        const onProgressChange = (event) => {
+          const detail = event.detail
+          if (!detail || detail.sessionId !== sessionId || !detail.snapshot) return
+          setSnapshot(detail.snapshot)
+          setError('')
+          setLastSyncAt(Date.now())
+        }
+        window.addEventListener(PROGRESS_EVENT, onProgressChange)
+
         load()
         const interval = window.setInterval(load, 3000)
         const onVisibility = () => {
@@ -913,6 +928,7 @@ window.__ModuleLoader__.load({
           active = false
           window.clearInterval(interval)
           controller?.abort()
+          window.removeEventListener(PROGRESS_EVENT, onProgressChange)
           document.removeEventListener('visibilitychange', onVisibility)
         }
       }, [sessionId, refreshTick])
@@ -1208,6 +1224,7 @@ window.__ModuleLoader__.load({
             }
             revisionRef.current = body.revision
             setSnapshot(body)
+            broadcastProgress(sessionId, body)
             const addedTitles = (Array.isArray(changes) ? changes : [])
               .filter((change) => change && !change.id && !change.remove && typeof change.title === 'string')
               .map((change) => change.title.trim())
@@ -1537,6 +1554,7 @@ window.__ModuleLoader__.load({
             }
             revisionRef.current = body.revision
             setSnapshot(body)
+            broadcastProgress(sessionId, body)
             const addedTitles = (Array.isArray(changes) ? changes : [])
               .filter((change) => change && !change.id && !change.remove && typeof change.title === 'string')
               .map((change) => change.title.trim())
