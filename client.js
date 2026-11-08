@@ -98,6 +98,7 @@ window.__ModuleLoader__.load({
       sideApproachEmpty: '还没有记录实现思路',
       sideProgress: '进度',
       sideDone: '完成',
+      sideAllDone: '其他已完成',
     }
 
     const en = {
@@ -187,6 +188,7 @@ window.__ModuleLoader__.load({
       sideApproachEmpty: 'No approach recorded yet',
       sideProgress: 'Progress',
       sideDone: 'Done',
+      sideAllDone: 'Other completed',
     }
 
     const STATUS_KEYS = ['todo', 'doing', 'done', 'blocked']
@@ -401,6 +403,14 @@ window.__ModuleLoader__.load({
       }
       .pb-side-textarea { min-height: 48px; resize: vertical; }
       .pb-side-input:focus, .pb-side-textarea:focus { outline: none; border-color: var(--dsw-alias-brand-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent); }
+      .pb-side-done-all { margin-top: 6px; }
+      .pb-side-done-all > summary { cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: 11px; padding: 4px 0; user-select: none; }
+      .pb-side-done-all > summary:hover { color: var(--dsw-alias-label-primary); }
+      .pb-side-done-item { border-top: 1px solid var(--dsw-alias-border-l1); padding: 5px 0; }
+      .pb-side-done-item > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
+      .pb-side-done-item > summary::-webkit-details-marker { display: none; }
+      .pb-side-done-item .pb-side-done-title { font-weight: 500; font-size: 11px; }
+      .pb-side-done-item .pb-side-detail-line, .pb-side-done-item .pb-side-note { margin-left: 12px; }
       .pb-side-detail-line { margin-top: 6px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
       .pb-side-detail-line b { color: var(--dsw-alias-label-primary); font-weight: 600; }
       .pb-side-empty { border: 1px dashed var(--dsw-alias-border-l2); border-radius: 9px; padding: 12px 10px; text-align: center; color: var(--dsw-alias-label-secondary); font-size: 11px; }
@@ -1230,6 +1240,10 @@ window.__ModuleLoader__.load({
         .filter((item) => item.status === 'done')
         .slice()
         .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+      const otherDone = items
+        .filter((item) => item.status === 'done' && item.id !== latestDone?.id)
+        .slice()
+        .sort((a, b) => b.updatedAt - a.updatedAt)
       const current = items.find((item) => item.status === 'doing') || items.find((item) => item.status === 'blocked') || items.find((item) => item.status === 'todo')
       const pending = items.filter(
         (item) => (item.status === 'todo' || item.status === 'blocked') && item.id !== current?.id,
@@ -1314,6 +1328,40 @@ window.__ModuleLoader__.load({
                         ),
                       )
                     : h('div', { className: 'pb-side-empty' }, t('sideEmptyDone')),
+                  otherDone.length
+                    ? h(
+                        'details',
+                        { className: 'pb-side-done-all' },
+                        h('summary', null, `${t('sideAllDone')} (${otherDone.length})`),
+                        otherDone.map((item) =>
+                          h(
+                            'details',
+                            { key: item.id, className: 'pb-side-done-item' },
+                            h(
+                              'summary',
+                              null,
+                              h('span', { className: 'pb-side-check' }, '✓'),
+                              h('span', { className: 'pb-side-done-title' }, item.title),
+                              h('span', { className: 'pb-side-meta' }, '100%'),
+                            ),
+                            item.approach
+                              ? h(
+                                  'div',
+                                  { className: 'pb-side-detail-line' },
+                                  h('b', null, t('approach')),
+                                  `：${item.approach}`,
+                                )
+                              : null,
+                            item.note ? h('p', { className: 'pb-side-note' }, item.note) : null,
+                            h(
+                              'div',
+                              { className: 'pb-side-detail-line' },
+                              `${t('lastUpdate')} ${new Date(item.updatedAt).toLocaleString()}`,
+                            ),
+                          ),
+                        ),
+                      )
+                    : null,
                 ),
                 h(
                   'section',
