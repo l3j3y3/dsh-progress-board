@@ -1254,7 +1254,7 @@ window.__ModuleLoader__.load({
         .filter((item) => item.status === 'done' && item.id !== latestDone?.id)
         .slice()
         .sort((a, b) => b.updatedAt - a.updatedAt)
-      const current = items.find((item) => item.status === 'doing') || items.find((item) => item.status === 'blocked') || items.find((item) => item.status === 'todo')
+      const current = items.find((item) => item.status === 'doing') || items.find((item) => item.status === 'blocked')
       const pending = items.filter(
         (item) => (item.status === 'todo' || item.status === 'blocked') && item.id !== current?.id,
       )

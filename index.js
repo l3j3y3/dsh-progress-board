@@ -25,7 +25,7 @@ export const inject = ['tools', 'systemPrompt', 'webServer', 'agents']
 
 const PROGRESS_POLICY = `## 进度板
 progress_update 维护用户可见的实时进度板。每项含 title/status/percent/current/next/approach/note。
-- 开工前先建扁平任务；只在完成子目标、状态/百分比实质变化、思路转向或应用用户改动时更新；只发变化项，不重发整份计划。
+- 开工前先建扁平任务；准备开始一项任务时先把该项设为 doing，current 写正在准备/做什么；完成时立即设为 done；若还有下一步，把下一条设为 doing。只在完成任务、状态/百分比实质变化、思路转向或应用用户改动时更新；只发变化项，不重发整份计划。
 - 用户每发来一段新的需求或反馈，先判断是否新任务；若是，在该回合开头新增/调整任务，再动手。
 - 用户改动会以“进度板用户改动”注入，只含变化字段；以它为准，处理完传 ackUserRevision。
 - 聊天只说明推进、下一步和待决策点，不复述整份计划。
