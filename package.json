@@ -1,0 +1,54 @@
+{
+  "name": "@local/progress-board",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "User-editable live progress board for DeepSeek Harness sessions.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/l3j3y3/dsh-progress-board.git"
+  },
+  "homepage": "https://github.com/l3j3y3/dsh-progress-board",
+  "bugs": {
+    "url": "https://github.com/l3j3y3/dsh-progress-board/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "progress-board",
+    "agent",
+    "plugin"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  },
+  "license": "MIT"
+}
