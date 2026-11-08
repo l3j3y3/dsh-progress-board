@@ -25,7 +25,8 @@ export const inject = ['tools', 'systemPrompt', 'webServer', 'agents']
 
 const PROGRESS_POLICY = `## 进度板
 progress_update 维护用户可见的实时进度板。每项含 title/status/percent/current/next/approach/note。
-- 开工前先建扁平任务；准备开始一项任务时先把该项设为 doing，current 写正在准备/做什么；完成时立即设为 done；若还有下一步，把下一条设为 doing。只在完成任务、状态/百分比实质变化、思路转向或应用用户改动时更新；只发变化项，不重发整份计划。
+- 每个用户回合开始时先检查进度板：如果板是空的，你的第一个工具调用必须是 progress_update，先建立扁平任务，再执行任何其他工具。不要等做完才补计划。
+- 准备开始一项任务时先把该项设为 doing，current 写正在准备/做什么；完成时立即设为 done；若还有下一步，把下一条设为 doing。只在完成任务、状态/百分比实质变化、思路转向或应用用户改动时更新；只发变化项，不重发整份计划。
 - 用户每发来一段新的需求或反馈，先判断是否新任务；若是，在该回合开头新增/调整任务，再动手。
 - 用户改动会以“进度板用户改动”注入，只含变化字段；以它为准，处理完传 ackUserRevision。
 - 聊天只说明推进、下一步和待决策点，不复述整份计划。
@@ -64,6 +65,7 @@ function emptyState(sessionId) {
     revision: 0,
     userRevision: 0,
     agentSeenRevision: 0,
+    enabled: false,
     createdAt: now,
     updatedAt: now,
     items: [],
@@ -174,30 +176,25 @@ export async function apply(ctx) {
   const commands = ctx.get('commands')
   if (!systemPrompt || !tools) throw new Error('progress-board 需要 systemPrompt 与 tools 服务')
 
-  const panelSessions = new Set()
-  const commandUntil = new Map()
-  const COMMAND_ENABLE_MS = 15 * 60 * 1000
-
+  /*
+   * Activation is a per-session, persisted property.
+   *
+   * The old model tied it to the mounted panel: collapsing the right sidebar,
+   * switching to the full main panel, or opening another tab unmounted the
+   * component and silently disabled the agent tool. The user then typed in the
+   * main composer and saw a frozen board. Opening the board once now keeps the
+   * tool available until the user explicitly runs `/progress off` (or presses
+   * the "auto update" control), across panel mounts and process restarts.
+   */
   function isEnabled(sessionId) {
-    if (panelSessions.has(sessionId)) return true
-    const until = commandUntil.get(sessionId)
-    if (until === undefined) return false
-    if (until > Date.now()) return true
-    commandUntil.delete(sessionId)
-    return false
+    return states.get(sessionId)?.enabled === true
   }
 
-  function setPanelEnabled(sessionId, enabled) {
-    if (enabled) panelSessions.add(sessionId)
-    else panelSessions.delete(sessionId)
-  }
-
-  function setCommandEnabled(sessionId, enabled) {
-    if (enabled) commandUntil.set(sessionId, Date.now() + COMMAND_ENABLE_MS)
-    else {
-      commandUntil.delete(sessionId)
-      panelSessions.delete(sessionId)
-    }
+  function setEnabled(sessionId, enabled) {
+    const state = ensureState(sessionId)
+    if (state.enabled === enabled) return
+    state.enabled = enabled
+    void persist(sessionId)
   }
 
   if (storage) {
@@ -242,6 +239,7 @@ export async function apply(ctx) {
     for (const item of state.items) {
       if (typeof item.approach !== 'string') item.approach = ''
     }
+    if (typeof state.enabled !== 'boolean') state.enabled = false
     return state
   }
 
@@ -267,6 +265,7 @@ export async function apply(ctx) {
       revision: state.revision,
       userRevision: state.userRevision,
       agentSeenRevision: state.agentSeenRevision,
+      enabled: state.enabled === true,
       pendingUserChanges: state.userChanges.filter((change) => change.revision > state.agentSeenRevision).length,
       updatedAt: state.updatedAt,
       persistent: Boolean(unit) && !storageError.includes('失败'),
@@ -425,44 +424,47 @@ export async function apply(ctx) {
       throw error
     }
 
-    const beforeItems = new Map(state.items.map((item) => [item.id, clone(item)]))
+    // Validate and apply the whole batch on a throwaway clone. A malformed
+    // entry must not leave earlier mutations in memory while the caller sees
+    // an error: with HTTP retries and 409 replays that turned one bad change
+    // into duplicated or half-applied tasks.
+    const working = clone(state)
     const records = []
     const now = Date.now()
-    for (const change of changes) applyOneChange(state, change, origin, now, records)
+    for (const change of changes) applyOneChange(working, change, origin, now, records)
 
     let revisionChanged = false
     if (records.length > 0) {
-      state.revision += 1
-      state.updatedAt = now
-      normalizeItems(state.items)
+      working.revision += 1
+      working.updatedAt = now
+      normalizeItems(working.items)
       for (const record of records) {
         if (record.kind !== 'edit') continue
-        const before = beforeItems.get(record.itemId)
-        if (!before) continue
         const orderField = record.fields.find((field) => field.field === 'order')
         if (orderField) {
-          const after = state.items.find((item) => item.id === record.itemId)
+          const after = working.items.find((item) => item.id === record.itemId)
           if (after) orderField.to = after.order
         }
       }
       if (origin === 'user') {
-        state.userRevision = state.revision
-        for (const record of records) state.userChanges.push({ revision: state.revision, at: now, ...record })
-        if (state.userChanges.length > MAX_USER_CHANGES) {
-          state.userChanges.splice(0, state.userChanges.length - MAX_USER_CHANGES)
+        working.userRevision = working.revision
+        for (const record of records) working.userChanges.push({ revision: working.revision, at: now, ...record })
+        if (working.userChanges.length > MAX_USER_CHANGES) {
+          working.userChanges.splice(0, working.userChanges.length - MAX_USER_CHANGES)
         }
-      } else if (state.userRevision > state.agentSeenRevision) {
-        state.agentSeenRevision = state.userRevision
       }
       revisionChanged = true
     }
 
     if (origin === 'agent' && ackUserRevision !== undefined) {
       const ack = finiteNumber(ackUserRevision)
-      if (ack !== undefined) state.agentSeenRevision = Math.max(state.agentSeenRevision, Math.min(state.userRevision, Math.round(ack)))
+      if (ack !== undefined) working.agentSeenRevision = Math.max(working.agentSeenRevision, Math.min(working.userRevision, Math.round(ack)))
     }
 
-    if (revisionChanged || (origin === 'agent' && ackUserRevision !== undefined)) await persist(sessionId)
+    if (revisionChanged || (origin === 'agent' && ackUserRevision !== undefined)) {
+      states.set(sessionId, working)
+      await persist(sessionId)
+    }
 
     const changed = records.map((record) => {
       if (record.kind === 'remove') return { id: record.itemId, title: record.title, removed: true }
@@ -473,7 +475,7 @@ export async function apply(ctx) {
         fields: record.fields.map((field) => field.field),
       }
     })
-    return { snapshot: publicSnapshot(state), changed: changed.filter(Boolean) }
+    return { snapshot: publicSnapshot(working), changed: changed.filter(Boolean) }
   }
 
   function pendingContext(sessionId) {
@@ -488,6 +490,15 @@ export async function apply(ctx) {
 ${lines.join('\n')}
 处理完后调用 progress_update，传 ackUserRevision=${state.userRevision}。如果这些改动不要求修改任务，也可以传 changes=[] 仅确认收到。
 </progress-board-user-edits>`
+  }
+
+  function kickoffContext(sessionId) {
+    if (!isEnabled(sessionId)) return ''
+    const state = states.get(sessionId)
+    if (!state || state.items.length > 0) return ''
+    return `<progress-board-kickoff>
+进度板已启用但当前为空。本回合的第一个工具调用必须是 progress_update：先建立 2–5 个扁平任务（第一项设为 doing，current 写正在做什么），然后再调用其他工具或开始实现。
+</progress-board-kickoff>`
   }
 
   const routeDisposers = []
@@ -603,13 +614,18 @@ ${lines.join('\n')}
               sendJson(res, 400, { ok: false, error: 'active 必须是布尔值' })
               return
             }
-            if (body.source === 'command') setCommandEnabled(sessionId, body.active)
-            else setPanelEnabled(sessionId, body.active)
+            const source = body.source === 'command' || body.source === 'user' ? body.source : 'panel'
+            if (body.active) {
+              setEnabled(sessionId, true)
+            } else if (source !== 'panel') {
+              // Panel unmount is not a user decision: collapsing the sidebar or
+              // switching views must not silently disable the agent tool.
+              setEnabled(sessionId, false)
+            }
             sendJson(res, 200, {
               ok: true,
               enabled: isEnabled(sessionId),
-              panel: panelSessions.has(sessionId),
-              commandUntil: commandUntil.get(sessionId) ?? null,
+              source,
             })
           } catch (error) {
             const status = error && error.statusCode ? error.statusCode : 400
@@ -630,7 +646,7 @@ ${lines.join('\n')}
       tools.register({
         name: 'progress_update',
         description:
-          '维护用户可见进度板。只在子目标完成、状态/百分比实质变化、用户新任务或用户改动时增量更新；只发变化项，不重发整份计划。用户改动处理后传 ackUserRevision；仅确认传 changes=[]。',
+          '维护用户可见进度板。每个用户回合开始时若板为空，先调用本工具建立任务，再执行其他操作。只在子目标完成、状态/百分比实质变化、用户新任务或用户改动时增量更新；只发变化项，不重发整份计划。用户改动处理后传 ackUserRevision；仅确认传 changes=[]。',
         parameters: {
           type: 'object',
           additionalProperties: false,
@@ -704,19 +720,19 @@ ${lines.join('\n')}
       () =>
         commands.register({
           name: 'progress',
-          description: '启用进度板工具（默认不加载，避免 token 开销）',
+          description: '启用/关闭进度板工具（默认不加载，避免 token 开销）',
           input: { hint: '[on|off]' },
           handler: ({ agent, rawInput }) => {
             const sessionId = agent.session.id
             const mode = String(rawInput || '').trim().toLowerCase()
             if (mode === 'off') {
-              setCommandEnabled(sessionId, false)
-              return { kind: 'success', text: '进度板已关闭；Agent 不再加载进度工具。' }
+              setEnabled(sessionId, false)
+              return { kind: 'success', text: '进度板已关闭；Agent 不再加载进度工具，手动编辑仍会保存。' }
             }
-            setCommandEnabled(sessionId, true)
+            setEnabled(sessionId, true)
             return {
               kind: 'success',
-              text: '进度板已启用 15 分钟；点击右上角进度板按钮打开面板。输入 /progress off 可关闭。',
+              text: '进度板已启用；之后在主界面发消息时 Agent 会自动更新，收起侧栏也不会关闭。输入 /progress off 可关闭。',
             }
           },
         }),
@@ -740,12 +756,18 @@ ${lines.join('\n')}
           order: 60,
           text: () => pendingContext(sessionId),
         })
+        const offKickoff = agent.ctx.systemPrompt.context({
+          name: 'progress-board-kickoff',
+          order: 61,
+          text: () => kickoffContext(sessionId),
+        })
         return () => {
           offPolicy()
           offContext()
+          offKickoff()
         }
       },
-      'progress-board: prompt policy and user edits',
+      'progress-board: prompt policy, user edits and empty-board kickoff',
     )
     agentDisposers.set(sessionId, dispose)
   }

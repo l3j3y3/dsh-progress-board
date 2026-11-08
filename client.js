@@ -17,6 +17,126 @@ window.__ModuleLoader__.load({
       window.dispatchEvent(new CustomEvent(PROGRESS_EVENT, { detail: { sessionId, snapshot } }))
     }
 
+    /*
+     * DeepSeek list prices in CNY per 1M tokens (api-docs.deepseek.com,
+     * 2026-11). Peak hours are Beijing time Mon–Fri 09:00–12:00 and
+     * 14:00–18:00; everything else (including weekends) is idle, at half the
+     * peak price. Public holidays are not tracked, so the estimate can be
+     * slightly high on a holiday weekday. The bill remains authoritative.
+     */
+    const TOKEN_PRICING = {
+      fallbackModel: 'deepseek-flash',
+      models: {
+        'deepseek-flash': {
+          name: 'DeepSeek-V4.1-Flash',
+          peak: { cacheRead: 0.04, input: 2, output: 8 },
+          idle: { cacheRead: 0.02, input: 1, output: 4 },
+        },
+        'deepseek-v4-pro': {
+          name: 'DeepSeek-V4-Pro',
+          peak: { cacheRead: 0.3, input: 9, output: 27 },
+          idle: { cacheRead: 0.15, input: 4.5, output: 13.5 },
+        },
+      },
+    }
+
+    function isPeakNow(now = new Date()) {
+      const china = new Date(now.getTime() + (now.getTimezoneOffset() + 480) * 60 * 1000)
+      const day = china.getDay()
+      if (day === 0 || day === 6) return false
+      const minutes = china.getHours() * 60 + china.getMinutes()
+      return (minutes >= 9 * 60 && minutes < 12 * 60) || (minutes >= 14 * 60 && minutes < 18 * 60)
+    }
+
+    function usageTotals(usage) {
+      const input = Number(usage?.uncachedInputTokens) || 0
+      const cacheRead = Number(usage?.cacheReadTokens) || 0
+      const cacheWrite = Number(usage?.cacheWriteTokens) || 0
+      const output = Number(usage?.outputTokens) || 0
+      return { input, cacheRead, cacheWrite, output, total: input + cacheRead + cacheWrite + output }
+    }
+
+    function estimateCost(totals, model, peak) {
+      const pricing = TOKEN_PRICING.models[model] || TOKEN_PRICING.models[TOKEN_PRICING.fallbackModel]
+      const rate = peak ? pricing.peak : pricing.idle
+      // Cache writes are billed at the cache-miss input rate on DeepSeek.
+      return (
+        (totals.input * rate.input +
+          totals.cacheRead * rate.cacheRead +
+          totals.cacheWrite * rate.input +
+          totals.output * rate.output) /
+        1e6
+      )
+    }
+
+    function usageSummary(state) {
+      const usage = state?.usage
+      if (!usage) return null
+      const totals = usageTotals(usage)
+      if (totals.total <= 0) return null
+      const model = state.model || TOKEN_PRICING.fallbackModel
+      const provider = state.provider || ''
+      const pricing = TOKEN_PRICING.models[model] || TOKEN_PRICING.models[TOKEN_PRICING.fallbackModel]
+      const peak = isPeakNow()
+      // DeepSeek is the only route this table prices; other providers show
+      // tokens without a currency figure rather than a wrong one.
+      const priced = provider === '' || /deepseek/i.test(provider)
+      const cost = priced ? estimateCost(totals, model, peak) : null
+      return { ...totals, model, displayName: pricing.name, peak, cost, priced }
+    }
+
+    function formatTokens(value) {
+      if (value >= 1e6) return `${(value / 1e6).toFixed(value >= 1e7 ? 0 : 2)}M`
+      if (value >= 1e3) return `${(value / 1e3).toFixed(value >= 1e5 ? 0 : 1)}k`
+      return String(value)
+    }
+
+    function formatCny(value) {
+      if (!Number.isFinite(value) || value <= 0) return '¥0'
+      return `¥${value < 0.01 ? value.toFixed(4) : value.toFixed(2)}`
+    }
+
+    function usageLabel(view) {
+      if (!view) return ''
+      const tokens = `${formatTokens(view.total)} tok`
+      return view.cost == null ? tokens : `${tokens} · ≈${formatCny(view.cost)}`
+    }
+
+    function usageTooltip(view, t) {
+      if (!view) return t('usageHint')
+      return `${t('usageHint')}\n${view.displayName} · ${view.peak ? t('usagePeak') : t('usageIdle')} · ${t('usageInput')} ${view.input.toLocaleString()} · ${t('usageCache')} ${view.cacheRead.toLocaleString()} · ${t('usageOutput')} ${view.output.toLocaleString()}`
+    }
+
+    function useSessionUsage(sessionId, usageApi) {
+      const [state, setState] = useState(null)
+      useEffect(() => {
+        if (!sessionId || !usageApi) {
+          setState(null)
+          return undefined
+        }
+        let alive = true
+        const read = () => {
+          if (!alive) return
+          try {
+            setState(usageApi.read(sessionId))
+          } catch (_error) {
+            setState(null)
+          }
+        }
+        read()
+        const off = usageApi.subscribe(sessionId, read)
+        return () => {
+          alive = false
+          try {
+            off?.()
+          } catch (_error) {
+            // Projection teardown is best-effort.
+          }
+        }
+      }, [sessionId, usageApi])
+      return state
+    }
+
     const zh = {
       nav: '进度板',
       title: '进度板',
@@ -87,6 +207,18 @@ window.__ModuleLoader__.load({
       dockAllDone: '全部完成',
       dockNext: '下一步',
       dockPending: '待同步',
+      autoOn: 'Agent 更新：开',
+      autoOff: 'Agent 更新：关',
+      autoWarn: 'Agent 自动更新已关闭；你在主界面发消息时进度板不会自动更新。',
+      autoEnable: '开启自动更新',
+      autoHint: '关闭后 Agent 不再加载进度工具；手动编辑仍会保存。',
+      usageTotal: '本会话用量',
+      usageHint: '本会话累计 token 与按 DeepSeek 公开单价估算的人民币费用；高峰/空闲时段按当前北京时间判断，实际以账单为准。',
+      usagePeak: '高峰',
+      usageIdle: '空闲',
+      usageInput: '输入',
+      usageCache: '缓存命中',
+      usageOutput: '输出',
       sideCompleted: '已完成的任务',
       sideLatest: '最新完成',
       sideDetails: '详情',
@@ -177,6 +309,18 @@ window.__ModuleLoader__.load({
       dockAllDone: 'All done',
       dockNext: 'Next',
       dockPending: 'pending',
+      autoOn: 'Agent updates: on',
+      autoOff: 'Agent updates: off',
+      autoWarn: 'Agent auto-update is off; messages sent from the main composer will not refresh the board.',
+      autoEnable: 'Turn on auto-update',
+      autoHint: 'While off, the agent does not load the progress tool. Manual edits are still saved.',
+      usageTotal: 'Session usage',
+      usageHint: 'Cumulative session tokens and an RMB estimate at DeepSeek list prices; peak/idle is based on the current Beijing time. The bill is authoritative.',
+      usagePeak: 'peak',
+      usageIdle: 'idle',
+      usageInput: 'input',
+      usageCache: 'cache hit',
+      usageOutput: 'output',
       sideCompleted: 'Completed',
       sideLatest: 'Latest completed',
       sideDetails: 'Details',
@@ -223,6 +367,21 @@ window.__ModuleLoader__.load({
       .pb-title { margin: 0; font-size: 22px; line-height: 1.25; font-weight: 650; letter-spacing: -.01em; }
       .pb-sub { margin: 6px 0 0; max-width: 680px; color: var(--dsw-alias-label-secondary); font-size: 13px; }
       .pb-head-right { display: flex; align-items: center; gap: 10px; flex: none; padding-top: 3px; }
+      .pb-usage {
+        display: flex; align-items: center; gap: 6px; min-width: 0;
+        color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.4;
+      }
+      .pb-usage b { color: var(--dsw-alias-label-primary); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .pb-usage-label { color: var(--dsw-alias-label-tertiary); }
+      .pb-usage-cost { color: var(--dsw-alias-brand-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+      .pb-usage-inline {
+        flex: none; padding: 3px 8px; border: 1px solid var(--dsw-alias-border-l1);
+        border-radius: 999px; background: var(--dsw-alias-bg-layer-1);
+      }
+      .pb-side > .pb-usage {
+        margin: -4px 0 12px; padding: 7px 9px; border: 1px solid var(--dsw-alias-border-l1);
+        border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-1);
+      }
       .pb-live { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 12px; white-space: nowrap; }
       .pb-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--dsw-alias-state-success-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-success-primary) 16%, transparent); }
       .pb-saving { color: var(--dsw-alias-label-secondary); font-size: 12px; }
@@ -382,7 +541,7 @@ window.__ModuleLoader__.load({
         font-family: inherit; font-size: 13px; line-height: 1.45;
       }
       .pb-side-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
-      .pb-side-head-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+      .pb-side-head-actions { display: flex; align-items: center; gap: 4px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
       .pb-side-title { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
       .pb-side-sub { margin: 3px 0 0; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.4; }
       .pb-side-section { margin-top: 15px; }
@@ -475,17 +634,25 @@ window.__ModuleLoader__.load({
       return { response, body }
     }
 
-    async function setPanelActive(sessionId, active) {
+    async function setPanelActive(sessionId, active, source = 'panel') {
       try {
-        await fetch(`${API}/active`, {
+        const response = await fetch(`${API}/active`, {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sessionId, active, source: 'panel' }),
+          body: JSON.stringify({ sessionId, active, source }),
         })
+        return await response.json().catch(() => null)
       } catch (_error) {
         // The board still works; only automatic Agent updates are unavailable.
+        return null
       }
+    }
+
+    /** Persist "the agent should keep this board up to date" for one session. */
+    async function setAgentEnabled(sessionId, enabled) {
+      const body = await setPanelActive(sessionId, enabled, 'user')
+      return body && body.ok === true ? body : null
     }
 
     function ProgressNavIcon({ size = 20 }) {
@@ -946,6 +1113,7 @@ window.__ModuleLoader__.load({
       const t = makeT(props)
       const { sessionId } = props
       const { snapshot, error: readError, refresh } = useProgressData(sessionId)
+      const usageView = usageSummary(useSessionUsage(sessionId, props.usage))
       const [expanded, setExpanded] = useState(false)
 
       useEffect(() => {
@@ -968,8 +1136,15 @@ window.__ModuleLoader__.load({
       const sub = [`${summary.done}/${summary.total} ${t('doneCount')}`]
       if (summary.blocked) sub.push(`${summary.blocked} ${t('blockedCount')}`)
       if (snapshot.pendingUserChanges) sub.push(`${snapshot.pendingUserChanges} ${t('dockPending')}`)
+      if (snapshot.enabled === false) sub.push(t('autoOff'))
+      if (usageView) sub.splice(1, 0, usageLabel(usageView))
       if (readError) sub.push(t('syncFailed'))
       sub.push(t('dockHint'))
+
+      const enableAuto = async () => {
+        await setAgentEnabled(sessionId, true)
+        refresh()
+      }
 
       const openPanel = () => {
         try {
@@ -1020,7 +1195,7 @@ window.__ModuleLoader__.load({
                 'span',
                 { className: 'pb-dock-body' },
                 h('span', { className: 'pb-dock-title' }, focusLine),
-                h('span', { className: 'pb-dock-sub' }, sub.join(' · ')),
+                h('span', { className: 'pb-dock-sub', title: usageView ? usageTooltip(usageView, t) : undefined }, sub.join(' · ')),
               ),
             ),
             h(
@@ -1037,6 +1212,18 @@ window.__ModuleLoader__.load({
                       onClick: refresh,
                     },
                     '↻',
+                  )
+                : null,
+              snapshot.enabled === false
+                ? h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'pb-dock-btn pb-dock-enable',
+                      title: t('autoHint'),
+                      onClick: enableAuto,
+                    },
+                    t('autoEnable'),
                   )
                 : null,
               h(
@@ -1188,15 +1375,24 @@ window.__ModuleLoader__.load({
       const useTabInfo = props.useTabInfo
       const tabInfo = useTabInfo ? useTabInfo() : undefined
       const { snapshot, setSnapshot, error: readError, lastSyncAt, refresh } = useProgressData(sessionId)
+      const usageView = usageSummary(useSessionUsage(sessionId, props.usage))
       const [saving, setSaving] = useState(false)
       const [actionError, setActionError] = useState('')
       const revisionRef = useRef(0)
 
       useEffect(() => {
         if (!sessionId) return undefined
+        // Opening the board enables agent updates for this session. There is
+        // deliberately no cleanup: collapsing the sidebar, switching tabs or
+        // opening the full main panel must not silently disable the tool.
         setPanelActive(sessionId, true)
-        return () => setPanelActive(sessionId, false)
+        return undefined
       }, [sessionId])
+
+      const enableAuto = async () => {
+        await setAgentEnabled(sessionId, true)
+        refresh()
+      }
 
       useEffect(() => {
         revisionRef.current = snapshot?.revision ?? 0
@@ -1306,6 +1502,19 @@ window.__ModuleLoader__.load({
               { className: 'pb-side-head-actions' },
               h(
                 'button',
+                {
+                  type: 'button',
+                  className: snapshot?.enabled === false ? 'pb-btn pb-btn-primary' : 'pb-btn',
+                  title: t('autoHint'),
+                  onClick: async () => {
+                    await setAgentEnabled(sessionId, snapshot?.enabled === false)
+                    refresh()
+                  },
+                },
+                snapshot?.enabled === false ? t('autoOff') : t('autoOn'),
+              ),
+              h(
+                'button',
                 { type: 'button', className: 'pb-btn', onClick: () => props.toggleFullscreen?.() },
                 tabInfo?.sidebar?.fullscreen ? t('sideHalf') : t('sideFull'),
               ),
@@ -1314,6 +1523,25 @@ window.__ModuleLoader__.load({
           ),
           readError ? h('div', { className: 'pb-side-error' }, `${t('readError')}${readError}`) : null,
           actionError ? h('div', { className: 'pb-side-error' }, `${t('saveError')}${actionError}`) : null,
+          usageView
+            ? h(
+                'div',
+                { className: 'pb-usage', title: usageTooltip(usageView, t) },
+                h('span', { className: 'pb-usage-label' }, t('usageTotal')),
+                h('b', null, `${formatTokens(usageView.total)} tok`),
+                usageView.cost == null
+                  ? null
+                  : h('span', { className: 'pb-usage-cost' }, `≈ ${formatCny(usageView.cost)}`),
+              )
+            : null,
+          snapshot?.enabled === false
+            ? h(
+                'div',
+                { className: 'pb-side-error' },
+                `${t('autoWarn')} `,
+                h('button', { type: 'button', className: 'pb-side-link', onClick: enableAuto }, t('autoEnable')),
+              )
+            : null,
           !snapshot
             ? h('div', { className: 'pb-loading' }, t('loading'))
             : h(
@@ -1473,6 +1701,7 @@ window.__ModuleLoader__.load({
         : undefined
 
       const [snapshot, setSnapshot] = useState(null)
+      const usageView = usageSummary(useSessionUsage(sessionId, props.usage))
       const [loading, setLoading] = useState(true)
       const [saving, setSaving] = useState(false)
       const [loadError, setLoadError] = useState('')
@@ -1483,6 +1712,20 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         revisionRef.current = snapshot?.revision ?? 0
       }, [snapshot?.revision])
+
+      useEffect(() => {
+        if (!sessionId) return undefined
+        // The full main panel keeps agent updates on just like the sidebar
+        // body; there is no cleanup, so leaving the panel does not disable it.
+        setPanelActive(sessionId, true)
+        return undefined
+      }, [sessionId])
+
+      const enableAuto = async () => {
+        if (!sessionId) return
+        await setAgentEnabled(sessionId, true)
+        setTick((value) => value + 1)
+      }
 
       useEffect(() => {
         if (!sessionId) {
@@ -1667,6 +1910,29 @@ window.__ModuleLoader__.load({
               snapshot?.pendingUserChanges
                 ? h('span', { className: 'pb-badge-pending' }, `${t('pending')} · ${snapshot.pendingUserChanges}`)
                 : null,
+              usageView
+                ? h(
+                    'span',
+                    { className: 'pb-usage pb-usage-inline', title: usageTooltip(usageView, t) },
+                    `${formatTokens(usageView.total)} tok${
+                      usageView.cost == null ? '' : ` · ≈${formatCny(usageView.cost)}`
+                    }`,
+                  )
+                : null,
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: snapshot?.enabled === false ? 'pb-btn pb-btn-primary' : 'pb-btn',
+                  title: t('autoHint'),
+                  onClick: async () => {
+                    if (!sessionId) return
+                    await setAgentEnabled(sessionId, snapshot?.enabled === false)
+                    setTick((value) => value + 1)
+                  },
+                },
+                snapshot?.enabled === false ? t('autoOff') : t('autoOn'),
+              ),
               h(
                 'span',
                 { className: 'pb-live', title: t('footerHint') },
@@ -1675,6 +1941,18 @@ window.__ModuleLoader__.load({
               ),
             ),
           ),
+          snapshot?.enabled === false
+            ? h(
+                'div',
+                { className: 'pb-warn' },
+                `${t('autoWarn')} `,
+                h(
+                  'button',
+                  { type: 'button', className: 'pb-btn', onClick: enableAuto },
+                  t('autoEnable'),
+                ),
+              )
+            : null,
           loadError
             ? h(
                 'div',
@@ -1820,6 +2098,53 @@ window.__ModuleLoader__.load({
           }
         }
         const openPanel = () => ctx.sidebarRight.openTab(RIGHT_TAB_KIND)
+
+        /*
+         * Live token accounting for one Session. The token-meter unit publishes
+         * `tokenUsage` as a host-computed Session projection, and model
+         * selection is a second projection; reading both faces keeps the
+         * figure current without adding it to the board's 3s HTTP poll.
+         */
+        const usageApi = {
+          read(sessionId) {
+            try {
+              const projectionStore = ctx.sessions.binding(sessionId)?.session?.projections
+              if (!projectionStore?.faceOf) return null
+              const usage = projectionStore.faceOf('tokenUsage')?.getSnapshot?.() ?? null
+              const selection = projectionStore.faceOf('modelSelection')?.getSnapshot?.() ?? null
+              return {
+                usage,
+                model: selection?.lastUsed?.model || selection?.next?.model || null,
+                provider: selection?.lastUsed?.provider || selection?.next?.provider || null,
+              }
+            } catch (_error) {
+              return null
+            }
+          },
+          subscribe(sessionId, listener) {
+            try {
+              const projectionStore = ctx.sessions.binding(sessionId)?.session?.projections
+              if (!projectionStore?.faceOf) return () => {}
+              const offs = []
+              for (const key of ['tokenUsage', 'modelSelection']) {
+                const face = projectionStore.faceOf(key)
+                if (face?.subscribe) offs.push(face.subscribe(listener))
+              }
+              return () => {
+                for (const off of offs) {
+                  try {
+                    off?.()
+                  } catch (_error) {
+                    // Projection faces are torn down with the Session.
+                  }
+                }
+              }
+            } catch (_error) {
+              return () => {}
+            }
+          },
+        }
+
         const togglePanel = () => {
           const active = ctx.sidebarRight.active()
           if (ctx.sidebarRight.isExpanded() && active?.kind === RIGHT_TAB_KIND) {
@@ -1858,6 +2183,7 @@ window.__ModuleLoader__.load({
                     toggleFullscreen,
                     openFullPanel,
                     wakeAgent,
+                    usage: usageApi,
                   }),
                 },
                 ProgressSidePanel,
@@ -1874,7 +2200,7 @@ window.__ModuleLoader__.load({
                   name: 'main',
                   key: PANEL_ID,
                   locale: NS,
-                  inject: () => ({ wakeAgent }),
+                  inject: () => ({ wakeAgent, usage: usageApi }),
                 },
                 ProgressPanel,
               ),
@@ -1908,7 +2234,7 @@ window.__ModuleLoader__.load({
                   id: 'progress-board-dock',
                   order: 5,
                   locale: NS,
-                  inject: () => ({ openPanel, togglePanel }),
+                  inject: () => ({ openPanel, togglePanel, usage: usageApi }),
                 },
                 ProgressDock,
               ),

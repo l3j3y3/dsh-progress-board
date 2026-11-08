@@ -1,9 +1,12 @@
 {
   "name": "@local/progress-board",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "User-editable live progress board for DeepSeek Harness sessions.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/l3j3y3/dsh-progress-board.git"
