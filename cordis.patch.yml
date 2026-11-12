@@ -1,3 +1,3 @@
 - insert:
     - id: progress-board
-      name: '@local/progress-board'
+      name: 'dsh-progress-board'

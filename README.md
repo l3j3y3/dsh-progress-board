@@ -18,16 +18,19 @@ DeepSeek Harness 的实时进度板插件：用户能看到 Agent 做到哪了�
 
 ## 安装
 
-需要 DeepSeek Harness 0.2.x（Web / Desktop）。
+需要 DeepSeek Harness 0.2.x（Web / Desktop）。插件已发布到 npm：<https://www.npmjs.com/package/dsh-progress-board>。
 
-1. 克隆本仓库：
-   ```bash
-   git clone https://github.com/l3j3y3/dsh-progress-board.git
+1. 在设置 → 插件 → 插件管理里安装 bundle，包名填：
    ```
-2. 在 DSH 的插件管理中选择安装本地 bundle，指向仓库目录。
-3. 重启 DSH（Host 侧插件在启动时加载），然后刷新页面。
+   dsh-progress-board
+   ```
+   或在终端里装进当前 profile：
+   ```bash
+   dsh plugin --profile web add dsh-progress-board
+   ```
+2. 重启 DSH（Host 侧插件在启动时加载），然后刷新页面。
 
-插件包名：`@local/progress-board`。
+插件包名：`dsh-progress-board`。从本地目录安装也一样可用（指向本仓库目录即可），包名保持不变。
 
 ## 使用
 

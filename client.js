@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/progress-board',
+  id: 'dsh-progress-board',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -8,7 +8,7 @@ window.__ModuleLoader__.load({
     const NS = 'progressBoard'
     const API = '/progress-board'
     const PANEL_ID = 'progress-board'
-    const RIGHT_TAB_ID = '@local/progress-board'
+    const RIGHT_TAB_ID = 'dsh-progress-board'
     const RIGHT_TAB_KIND = 'progress-board'
     const PROGRESS_EVENT = 'progress-board:changed'
 

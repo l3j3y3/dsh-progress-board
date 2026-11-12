@@ -1,9 +1,9 @@
 {
-  "name": "@local/progress-board",
+  "name": "dsh-progress-board",
   "version": "1.0.1",
-  "private": true,
   "type": "module",
   "description": "User-editable live progress board for DeepSeek Harness sessions.",
+  "icon": "./icon.svg",
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
@@ -18,15 +18,19 @@
   "keywords": [
     "deepseek-harness",
     "dsh",
+    "dsh-plugin",
     "progress-board",
     "agent",
     "plugin"
   ],
+  "main": "./index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon.svg": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
     "README.md",
@@ -52,6 +56,9 @@
         "@deepseek-ai/dsh-client-ui-sidebar-right"
       ]
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "license": "MIT"
 }
